@@ -1,159 +1,123 @@
-const canvas = document.getElementById("area");
-const hud = document.getElementById("hud");
-const ctx = canvas.getContext("2d");
+async function fetchJSON(url, opts) {
+  const res = await fetch(url, opts);
+  return res.json();
+}
 
-let ws = null;
-let connected = false;
-let lastPointerType = "-";
+function setupAreaEditor(canvas, fieldsContainer, getArea, setArea, onChange) {
+  const ctx = canvas.getContext("2d");
+  let dragging = false;
+  let start = null;
 
-let tabletArea = { x: 0, y: 0, w: 1, h: 1 };
+  function draw() {
+    const a = getArea();
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#0f0f16";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = "#33334a";
+    ctx.strokeRect(0, 0, canvas.width, canvas.height);
 
-async function refreshArea() {
-  try {
-    const res = await fetch("/api/settings");
-    const cfg = await res.json();
-    if (cfg.tablet_area) tabletArea = cfg.tablet_area;
+    const rx = a.x * canvas.width, ry = a.y * canvas.height;
+    const rw = a.w * canvas.width, rh = a.h * canvas.height;
+    ctx.fillStyle = "rgba(90,160,255,0.35)";
+    ctx.strokeStyle = "#5aa0ff";
+    ctx.lineWidth = 2;
+    ctx.fillRect(rx, ry, rw, rh);
+    ctx.strokeRect(rx, ry, rw, rh);
+  }
+
+  function posFromEvent(e) {
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: Math.min(Math.max((e.clientX - rect.left) / rect.width, 0), 1),
+      y: Math.min(Math.max((e.clientY - rect.top) / rect.height, 0), 1),
+    };
+  }
+
+  canvas.addEventListener("mousedown", (e) => {
+    dragging = true;
+    start = posFromEvent(e);
+  });
+  canvas.addEventListener("mousemove", (e) => {
+    if (!dragging) return;
+    const cur = posFromEvent(e);
+    const x = Math.min(start.x, cur.x);
+    const y = Math.min(start.y, cur.y);
+    const w = Math.max(Math.abs(cur.x - start.x), 0.01);
+    const h = Math.max(Math.abs(cur.y - start.y), 0.01);
+    setArea({ x, y, w, h });
+    syncFields();
     draw();
-  } catch (e) {
-    // Ignore temporary connection issues.
-  }
-}
+    onChange && onChange();
+  });
+  window.addEventListener("mouseup", () => { dragging = false; });
 
-refreshArea();
-setInterval(refreshArea, 3000);
+  const inputs = {};
+  ["x", "y", "w", "h"].forEach((key) => {
+    const label = document.createElement("label");
+    label.textContent = key.toUpperCase() + " %";
+    const input = document.createElement("input");
+    input.type = "number";
+    input.min = 0; input.max = 100; input.step = 0.5;
+    input.addEventListener("input", () => {
+      const a = { ...getArea() };
+      a[key] = Math.min(Math.max(parseFloat(input.value) || 0, 0), 100) / 100;
+      setArea(a);
+      draw();
+      onChange && onChange();
+    });
+    label.appendChild(input);
+    fieldsContainer.appendChild(label);
+    inputs[key] = input;
+  });
 
-function resize() {
-  canvas.width = window.innerWidth * window.devicePixelRatio;
-  canvas.height = window.innerHeight * window.devicePixelRatio;
-  canvas.style.width = window.innerWidth + "px";
-  canvas.style.height = window.innerHeight + "px";
-  draw();
-}
-
-window.addEventListener("resize", resize);
-
-function connect() {
-  const proto = location.protocol === "https:" ? "wss" : "ws";
-  ws = new WebSocket(`${proto}://${location.host}/ws`);
-
-  ws.onopen = () => {
-    connected = true;
-    updateHud();
-  };
-
-  ws.onclose = () => {
-    connected = false;
-    updateHud();
-    setTimeout(connect, 1000);
-  };
-
-  ws.onerror = () => {
-    connected = false;
-    updateHud();
-  };
-}
-
-connect();
-
-function updateHud() {
-  hud.textContent = connected
-  ? `connected — pointer: ${lastPointerType}`
-  : "reconnecting…";
-
-  draw();
-}
-
-function send(type, e) {
-  if (!connected || ws.readyState !== WebSocket.OPEN) return;
-
-  const rect = canvas.getBoundingClientRect();
-  const x = (e.clientX - rect.left) / rect.width;
-  const y = (e.clientY - rect.top) / rect.height;
-
-  ws.send(
-    JSON.stringify({
-      type,
-      x: Math.min(Math.max(x, 0), 1),
-                   y: Math.min(Math.max(y, 0), 1),
-                   pressure: e.pressure ?? 0,
-                   tiltX: e.tiltX ?? 0,
-                   tiltY: e.tiltY ?? 0,
-                   pointerType: e.pointerType,
-    })
-  );
-}
-
-// Hover events are forwarded too; clicking is handled by the server.
-canvas.addEventListener("pointerdown", (e) => {
-  e.preventDefault();
-  canvas.setPointerCapture(e.pointerId);
-  lastPointerType = e.pointerType;
-  send("down", e);
-  updateHud();
-});
-
-canvas.addEventListener("pointermove", (e) => {
-  e.preventDefault();
-  lastPointerType = e.pointerType;
-  send("move", e);
-});
-
-canvas.addEventListener("pointerup", (e) => {
-  e.preventDefault();
-  send("up", e);
-});
-
-canvas.addEventListener("pointercancel", (e) => {
-  send("up", e);
-});
-
-canvas.addEventListener("contextmenu", (e) => e.preventDefault());
-
-function draw() {
-  ctx.setTransform(window.devicePixelRatio, 0, 0, window.devicePixelRatio, 0, 0);
-
-  const w = window.innerWidth;
-  const h = window.innerHeight;
-
-  ctx.fillStyle = connected ? "#0f1a2b" : "#2b0f0f";
-  ctx.fillRect(0, 0, w, h);
-
-  ctx.strokeStyle = "rgba(255,255,255,0.08)";
-  const step = 40;
-
-  for (let x = 0; x < w; x += step) {
-    ctx.beginPath();
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, h);
-    ctx.stroke();
+  function syncFields() {
+    const a = getArea();
+    inputs.x.value = (a.x * 100).toFixed(1);
+    inputs.y.value = (a.y * 100).toFixed(1);
+    inputs.w.value = (a.w * 100).toFixed(1);
+    inputs.h.value = (a.h * 100).toFixed(1);
   }
 
-  for (let y = 0; y < h; y += step) {
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(w, y);
-    ctx.stroke();
-  }
-
-  const ax = tabletArea.x * w;
-  const ay = tabletArea.y * h;
-  const aw = tabletArea.w * w;
-  const ah = tabletArea.h * h;
-
-  // Darken everything outside the active area.
-  ctx.fillStyle = "rgba(0,0,0,0.55)";
-  ctx.fillRect(0, 0, w, ay);
-  ctx.fillRect(0, ay + ah, w, h - (ay + ah));
-  ctx.fillRect(0, ay, ax, ah);
-  ctx.fillRect(ax + aw, ay, w - (ax + aw), ah);
-
-  ctx.strokeStyle = "#5aa0ff";
-  ctx.lineWidth = 3;
-  ctx.strokeRect(ax, ay, aw, ah);
-
-  ctx.fillStyle = "#5aa0ff";
-  ctx.font = "14px system-ui, sans-serif";
-  ctx.fillText("active area", ax + 8, ay + 20);
+  return { draw, syncFields };
 }
 
-resize();
+let config = {
+  screen_area: { x: 0, y: 0, w: 1, h: 1 },
+  tablet_area: { x: 0, y: 0, w: 1, h: 1 },
+};
+
+const screenEditor = setupAreaEditor(
+  document.getElementById("screenCanvas"),
+  document.getElementById("screenFields"),
+  () => config.screen_area,
+  (a) => { config.screen_area = a; }
+);
+
+const tabletEditor = setupAreaEditor(
+  document.getElementById("tabletCanvas"),
+  document.getElementById("tabletFields"),
+  () => config.tablet_area,
+  (a) => { config.tablet_area = a; }
+);
+
+async function load() {
+  config = await fetchJSON("/api/settings");
+  screenEditor.syncFields(); screenEditor.draw();
+  tabletEditor.syncFields(); tabletEditor.draw();
+  const info = await fetchJSON("/api/info");
+  document.getElementById("info").textContent =
+    `Open this address on your tablet's browser: http://${info.ip}:${info.port}/`;
+}
+
+document.getElementById("save").addEventListener("click", async () => {
+  await fetchJSON("/api/settings", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(config),
+  });
+  const status = document.getElementById("status");
+  status.textContent = "Saved ✓";
+  setTimeout(() => { status.textContent = ""; }, 1500);
+});
+
+load();
