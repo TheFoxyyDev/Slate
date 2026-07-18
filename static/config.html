@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <title>Slate Settings</title>
-<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/style.css?v=__VERSION__">
 </head>
 <body>
-<h1>Slate</h1>
+<h1>Slate <span id="version" class="muted"></span></h1>
 <p id="info" class="muted">loading…</p>
 
 <div class="panel">
@@ -22,8 +22,9 @@
 </div>
 
 <button id="save">Save</button>
+<span id="dirty" class="badge" hidden>Unsaved changes (previewing live on tablet)</span>
 <span id="status" class="muted"></span>
 
-<script src="/static/config.js"></script>
+<script src="/static/config.js?v=__VERSION__"></script>
 </body>
 </html>

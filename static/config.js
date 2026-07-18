@@ -14,9 +14,39 @@ const ctx = canvas.getContext("2d");
 const tray = document.getElementById("tray");
 
 let displays = [];
+let dirty = false;
 
 const HANDLE = 16;
 const MIN_FRAC = 0.05;
+
+function displaysMap() {
+  const map = {};
+  displays.forEach((d) => {
+    if (d.enabled) map[d.name] = { tablet_region: d.tablet_region, enabled: true };
+  });
+  return map;
+}
+
+function setDirty(v) {
+  dirty = v;
+  const el = document.getElementById("dirty");
+  if (el) el.hidden = !v;
+}
+
+let previewPending = false;
+function schedulePreview() {
+  setDirty(true);
+  if (previewPending) return;
+  previewPending = true;
+  requestAnimationFrame(() => {
+    previewPending = false;
+    fetch("/api/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ displays: displaysMap() }),
+    }).catch(() => {});
+  });
+}
 
 function regionPx(r) {
   return { x: r.x * canvas.width, y: r.y * canvas.height, w: r.w * canvas.width, h: r.h * canvas.height };
@@ -123,7 +153,11 @@ function startTrayDrag(e, d) {
     canvas.style.outline = "";
     if (!overCanvas(ev)) return;
     const p = canvasPos(ev);
-    const w = 0.4, h = 0.4;
+    const canvasAspect = canvas.width / canvas.height;
+    const monAspect = d.w / d.h;
+    let h = 0.5;
+    let w = h * (monAspect / canvasAspect);
+    if (w > 0.9) { w = 0.9; h = w * (canvasAspect / monAspect); }
     let x = p.x / canvas.width - w / 2;
     let y = p.y / canvas.height - h / 2;
     x = Math.min(Math.max(x, 0), 1 - w);
@@ -132,6 +166,7 @@ function startTrayDrag(e, d) {
     d.tablet_region = { x, y, w, h };
     renderTray();
     draw();
+    schedulePreview();
   };
   window.addEventListener("pointermove", onMove);
   window.addEventListener("pointerup", onUp);
@@ -163,6 +198,7 @@ canvas.addEventListener("pointerdown", (e) => {
     hit.d.enabled = false;
     renderTray();
     draw();
+    schedulePreview();
     return;
   }
 
@@ -179,6 +215,7 @@ canvas.addEventListener("pointerdown", (e) => {
       r.h = Math.min(Math.max(p.y / canvas.height - r.y, MIN_FRAC), 1 - r.y);
     }
     draw();
+    schedulePreview();
   };
   const onUp = () => {
     canvas.removeEventListener("pointermove", onMove);
@@ -189,28 +226,41 @@ canvas.addEventListener("pointerdown", (e) => {
 });
 
 async function load() {
+  await fetch("/api/preview", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ clear: true }),
+  }).catch(() => {});
   const data = await fetchJSON("/api/displays");
   displays = data.displays || [];
+  setDirty(false);
   renderTray();
   draw();
   const info = await fetchJSON("/api/info");
   document.getElementById("info").textContent =
     `Open this address on your tablet's browser: http://${info.ip}:${info.port}/`;
+  const v = document.getElementById("version");
+  if (v && info.version) v.textContent = info.version;
 }
 
 document.getElementById("save").addEventListener("click", async () => {
-  const map = {};
-  displays.forEach((d) => {
-    if (d.enabled) map[d.name] = { tablet_region: d.tablet_region, enabled: true };
-  });
   await fetchJSON("/api/settings", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ displays: map }),
+    body: JSON.stringify({ displays: displaysMap() }),
   });
+  setDirty(false);
   const status = document.getElementById("status");
   status.textContent = "Saved ✓";
   setTimeout(() => { status.textContent = ""; }, 1500);
+});
+
+window.addEventListener("pagehide", () => {
+  if (!dirty) return;
+  navigator.sendBeacon(
+    "/api/preview",
+    new Blob([JSON.stringify({ clear: true })], { type: "application/json" })
+  );
 });
 
 load();

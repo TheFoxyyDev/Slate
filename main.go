@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"embed"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io/fs"
 	"log"
+	"math"
 	"net"
 	"net/http"
 	"sync"
@@ -19,15 +21,24 @@ import (
 //go:embed static
 var staticFS embed.FS
 
+const version = "v1.3"
+
 type Bridge struct {
 	port int
 
 	mu       sync.RWMutex
 	cfg      Config
+	preview  *Config
 	displays []Display
 
 	dev     *Device
 	devLock sync.Mutex
+}
+
+func sameDisplayMap(a, b map[string]DisplayConfig) bool {
+	ja, _ := json.Marshal(a)
+	jb, _ := json.Marshal(b)
+	return bytes.Equal(ja, jb)
 }
 
 func (b *Bridge) refreshDisplays() {
@@ -51,10 +62,29 @@ func clamp(v, lo, hi float64) float64 {
 	}
 }
 
-func mapPoint(nx, ny float64, cfg Config, displays []Display) (int32, int32, bool) {
+func rectDist(px, py float64, r Area) float64 {
+	dx := math.Max(math.Max(r.X-px, px-(r.X+r.W)), 0)
+	dy := math.Max(math.Max(r.Y-py, py-(r.Y+r.H)), 0)
+	return math.Hypot(dx, dy)
+}
+
+func mapPoint(nx, ny float64, cfg Config, displays []Display, prefer string) (int32, int32, string, bool) {
 	bx, by, bw, bh := boundingBox(displays)
 	if bw <= 0 || bh <= 0 {
-		return 0, 0, false
+		return 0, 0, "", false
+	}
+
+	emit := func(d Display, r Area) (int32, int32) {
+		relX := clamp((nx-r.X)/max(r.W, 1e-6), 0, 1)
+		relY := clamp((ny-r.Y)/max(r.H, 1e-6), 0, 1)
+		sx := (float64(d.X) - bx) / bw
+		sy := (float64(d.Y) - by) / bh
+		sw := float64(d.W) / bw
+		sh := float64(d.H) / bh
+		outX := clamp(sx+relX*sw, 0, 1)
+		outY := clamp(sy+relY*sh, 0, 1)
+		absMax := float64(cfg.AbsRange)
+		return int32(outX * absMax), int32(outY * absMax)
 	}
 
 	for _, d := range displays {
@@ -63,23 +93,41 @@ func mapPoint(nx, ny float64, cfg Config, displays []Display) (int32, int32, boo
 			continue
 		}
 		r := dc.TabletRegion
-		if nx < r.X || nx > r.X+r.W || ny < r.Y || ny > r.Y+r.H {
+		if nx >= r.X && nx <= r.X+r.W && ny >= r.Y && ny <= r.Y+r.H {
+			x, y := emit(d, r)
+			return x, y, d.Name, true
+		}
+	}
+
+	if prefer != "" {
+		if dc, ok := cfg.Displays[prefer]; ok && dc.Enabled {
+			for _, d := range displays {
+				if d.Name == prefer {
+					x, y := emit(d, dc.TabletRegion)
+					return x, y, prefer, true
+				}
+			}
+		}
+	}
+
+	bestDist := math.MaxFloat64
+	var bestD Display
+	var bestR Area
+	found := false
+	for _, d := range displays {
+		dc, ok := cfg.Displays[d.Name]
+		if !ok || !dc.Enabled {
 			continue
 		}
-		relX := clamp((nx-r.X)/max(r.W, 1e-6), 0, 1)
-		relY := clamp((ny-r.Y)/max(r.H, 1e-6), 0, 1)
-
-		sx := (float64(d.X) - bx) / bw
-		sy := (float64(d.Y) - by) / bh
-		sw := float64(d.W) / bw
-		sh := float64(d.H) / bh
-		outX := clamp(sx+relX*sw, 0, 1)
-		outY := clamp(sy+relY*sh, 0, 1)
-
-		absMax := float64(cfg.AbsRange)
-		return int32(outX * absMax), int32(outY * absMax), true
+		if dist := rectDist(nx, ny, dc.TabletRegion); dist < bestDist {
+			bestDist, bestD, bestR, found = dist, d, dc.TabletRegion, true
+		}
 	}
-	return 0, 0, false
+	if !found {
+		return 0, 0, "", false
+	}
+	x, y := emit(bestD, bestR)
+	return x, y, bestD.Name, true
 }
 
 func getLocalIP() string {
@@ -106,6 +154,7 @@ func (b *Bridge) handleWS(w http.ResponseWriter, r *http.Request) {
 	defer c.CloseNow()
 
 	ctx := r.Context()
+	var lastRegion string
 	for {
 		typ, data, err := c.Read(ctx)
 		if err != nil {
@@ -122,16 +171,23 @@ func (b *Bridge) handleWS(w http.ResponseWriter, r *http.Request) {
 		if msg.Type != "move" && msg.Type != "down" && msg.Type != "up" {
 			continue
 		}
+		if msg.Type == "down" {
+			lastRegion = ""
+		}
 
 		b.mu.RLock()
 		cfg := b.cfg
+		if b.preview != nil {
+			cfg = *b.preview
+		}
 		displays := b.displays
 		b.mu.RUnlock()
 
-		x, y, ok := mapPoint(msg.X, msg.Y, cfg, displays)
+		x, y, region, ok := mapPoint(msg.X, msg.Y, cfg, displays, lastRegion)
 		if !ok {
 			continue
 		}
+		lastRegion = region
 
 		b.devLock.Lock()
 		b.dev.emit(evAbs, absX, x)
@@ -164,6 +220,7 @@ func (b *Bridge) handlePostSettings(w http.ResponseWriter, r *http.Request) {
 	b.mu.Lock()
 	incoming.AbsRange = b.cfg.AbsRange
 	b.cfg = incoming
+	b.preview = nil
 	cfg := b.cfg
 	b.mu.Unlock()
 
@@ -171,6 +228,61 @@ func (b *Bridge) handlePostSettings(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[warn] failed to save config: %v", err)
 	}
 	writeJSON(w, cfg)
+}
+
+func (b *Bridge) handlePreview(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Clear    bool                     `json:"clear"`
+		Displays map[string]DisplayConfig `json:"displays"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	b.mu.Lock()
+	if req.Clear {
+		b.preview = nil
+	} else {
+		if req.Displays == nil {
+			req.Displays = map[string]DisplayConfig{}
+		}
+		b.preview = &Config{Displays: req.Displays, AbsRange: b.cfg.AbsRange}
+	}
+	b.mu.Unlock()
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (b *Bridge) handleOverlay(w http.ResponseWriter, r *http.Request) {
+	b.mu.RLock()
+	cfg := b.cfg
+	dirty := false
+	if b.preview != nil {
+		dirty = !sameDisplayMap(b.cfg.Displays, b.preview.Displays)
+		cfg = *b.preview
+	}
+	displays := b.displays
+	b.mu.RUnlock()
+
+	type region struct {
+		Name string  `json:"name"`
+		X    float64 `json:"x"`
+		Y    float64 `json:"y"`
+		W    float64 `json:"w"`
+		H    float64 `json:"h"`
+	}
+	regions := make([]region, 0, len(displays))
+	for _, d := range displays {
+		dc, ok := cfg.Displays[d.Name]
+		if !ok || !dc.Enabled {
+			continue
+		}
+		r := dc.TabletRegion
+		regions = append(regions, region{Name: d.Name, X: r.X, Y: r.Y, W: r.W, H: r.H})
+	}
+
+	writeJSON(w, map[string]any{"regions": regions, "dirty": dirty})
 }
 
 func (b *Bridge) handleDisplays(w http.ResponseWriter, r *http.Request) {
@@ -200,7 +312,7 @@ func (b *Bridge) handleDisplays(w http.ResponseWriter, r *http.Request) {
 }
 
 func (b *Bridge) handleInfo(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, map[string]any{"ip": getLocalIP(), "port": b.port})
+	writeJSON(w, map[string]any{"ip": getLocalIP(), "port": b.port, "version": version})
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
@@ -228,6 +340,12 @@ func main() {
 		log.Fatal(err)
 	}
 	fileServer := http.FileServer(http.FS(staticSub))
+	noCache := func(h http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+			h.ServeHTTP(w, r)
+		})
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -240,7 +358,7 @@ func main() {
 	mux.HandleFunc("/config", func(w http.ResponseWriter, r *http.Request) {
 		serveEmbedded(w, r, staticSub, "config.html")
 	})
-	mux.Handle("/static/", http.StripPrefix("/static/", fileServer))
+	mux.Handle("/static/", http.StripPrefix("/static/", noCache(fileServer)))
 	mux.HandleFunc("/ws", b.handleWS)
 	mux.HandleFunc("/api/settings", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
@@ -253,6 +371,8 @@ func main() {
 		}
 	})
 	mux.HandleFunc("/api/displays", b.handleDisplays)
+	mux.HandleFunc("/api/preview", b.handlePreview)
+	mux.HandleFunc("/api/overlay", b.handleOverlay)
 	mux.HandleFunc("/api/info", b.handleInfo)
 
 	ip := getLocalIP()
@@ -276,7 +396,9 @@ func serveEmbedded(w http.ResponseWriter, r *http.Request, fsys fs.FS, name stri
 		http.NotFound(w, r)
 		return
 	}
+	data = bytes.ReplaceAll(data, []byte("__VERSION__"), []byte(version))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	w.Write(data)
 }
 

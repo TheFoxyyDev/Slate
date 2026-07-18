@@ -29,11 +29,33 @@
     border-radius: 6px;
     pointer-events: none;
   }
+  #unsaved {
+    position: fixed;
+    top: 12px;
+    right: 12px;
+    color: #08101f;
+    font: 600 14px system-ui, sans-serif;
+    background: #ffd166;
+    padding: 6px 10px;
+    border-radius: 6px;
+    pointer-events: none;
+  }
+  #unsaved[hidden] { display: none; }
+  #version {
+    position: fixed;
+    bottom: 10px;
+    left: 12px;
+    color: rgba(255,255,255,0.5);
+    font: 12px system-ui, sans-serif;
+    pointer-events: none;
+  }
 </style>
 </head>
 <body>
 <canvas id="area"></canvas>
 <div id="hud">connecting…</div>
-<script src="/static/tablet.js"></script>
+<div id="unsaved" hidden>Unsaved changes</div>
+<div id="version"></div>
+<script src="/static/tablet.js?v=__VERSION__"></script>
 </body>
 </html>

@@ -7,6 +7,7 @@ let connected = false;
 let lastPointerType = "-";
 
 let regions = [];
+let dirty = false;
 
 const REGION_COLORS = [
   "#5aa0ff", "#57d9a3", "#ff9f5a", "#c77dff",
@@ -15,17 +16,23 @@ const REGION_COLORS = [
 
 async function refreshArea() {
   try {
-    const res = await fetch("/api/displays");
+    const res = await fetch("/api/overlay");
     const data = await res.json();
-    regions = (data.displays || [])
-      .filter((d) => d.enabled)
-      .map((d) => ({ name: d.name, ...d.tablet_region }));
+    regions = data.regions || [];
+    dirty = !!data.dirty;
+    const banner = document.getElementById("unsaved");
+    if (banner) banner.hidden = !dirty;
     draw();
   } catch (e) {
   }
 }
 refreshArea();
-setInterval(refreshArea, 3000);
+setInterval(refreshArea, 300);
+
+fetch("/api/info").then((r) => r.json()).then((d) => {
+  const el = document.getElementById("version");
+  if (el && d.version) el.textContent = d.version;
+}).catch(() => {});
 
 function resize() {
   canvas.width = window.innerWidth * window.devicePixelRatio;

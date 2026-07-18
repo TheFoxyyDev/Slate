@@ -76,3 +76,13 @@ button {
 }
 button:hover { background: #78b3ff; }
 #status { margin-left: 10px; }
+.badge {
+  margin-left: 10px;
+  background: #ffd166;
+  color: #08101f;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 8px;
+  border-radius: 5px;
+}
+.badge[hidden] { display: none; }
