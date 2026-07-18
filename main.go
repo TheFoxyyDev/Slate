@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/coder/websocket"
 	qrcode "github.com/skip2/go-qrcode"
@@ -18,16 +19,25 @@ import (
 //go:embed static
 var staticFS embed.FS
 
-// Bridge holds the shared server state guarded for concurrent access from the
-// HTTP handlers and WebSocket connections.
 type Bridge struct {
 	port int
 
-	mu  sync.RWMutex
-	cfg Config
+	mu       sync.RWMutex
+	cfg      Config
+	displays []Display
 
 	dev     *Device
-	devLock sync.Mutex // serialises event emission to the uinput device
+	devLock sync.Mutex
+}
+
+func (b *Bridge) refreshDisplays() {
+	for {
+		d := detectDisplays()
+		b.mu.Lock()
+		b.displays = d
+		b.mu.Unlock()
+		time.Sleep(2 * time.Second)
+	}
 }
 
 func clamp(v, lo, hi float64) float64 {
@@ -41,20 +51,35 @@ func clamp(v, lo, hi float64) float64 {
 	}
 }
 
-// mapPoint maps a raw normalized tablet coordinate (0..1) through the active
-// tablet_area crop, into the target screen_area, and finally into absolute
-// device units.
-func mapPoint(nx, ny float64, cfg Config) (int32, int32) {
-	ta := cfg.TabletArea
-	relX := clamp((nx-ta.X)/max(ta.W, 1e-6), 0, 1)
-	relY := clamp((ny-ta.Y)/max(ta.H, 1e-6), 0, 1)
+func mapPoint(nx, ny float64, cfg Config, displays []Display) (int32, int32, bool) {
+	bx, by, bw, bh := boundingBox(displays)
+	if bw <= 0 || bh <= 0 {
+		return 0, 0, false
+	}
 
-	sa := cfg.ScreenArea
-	outX := clamp(sa.X+relX*sa.W, 0, 1)
-	outY := clamp(sa.Y+relY*sa.H, 0, 1)
+	for _, d := range displays {
+		dc, ok := cfg.Displays[d.Name]
+		if !ok || !dc.Enabled {
+			continue
+		}
+		r := dc.TabletRegion
+		if nx < r.X || nx > r.X+r.W || ny < r.Y || ny > r.Y+r.H {
+			continue
+		}
+		relX := clamp((nx-r.X)/max(r.W, 1e-6), 0, 1)
+		relY := clamp((ny-r.Y)/max(r.H, 1e-6), 0, 1)
 
-	absMax := float64(cfg.AbsRange)
-	return int32(outX * absMax), int32(outY * absMax)
+		sx := (float64(d.X) - bx) / bw
+		sy := (float64(d.Y) - by) / bh
+		sw := float64(d.W) / bw
+		sh := float64(d.H) / bh
+		outX := clamp(sx+relX*sw, 0, 1)
+		outY := clamp(sy+relY*sh, 0, 1)
+
+		absMax := float64(cfg.AbsRange)
+		return int32(outX * absMax), int32(outY * absMax), true
+	}
+	return 0, 0, false
 }
 
 func getLocalIP() string {
@@ -100,13 +125,14 @@ func (b *Bridge) handleWS(w http.ResponseWriter, r *http.Request) {
 
 		b.mu.RLock()
 		cfg := b.cfg
+		displays := b.displays
 		b.mu.RUnlock()
 
-		x, y := mapPoint(msg.X, msg.Y, cfg)
+		x, y, ok := mapPoint(msg.X, msg.Y, cfg, displays)
+		if !ok {
+			continue
+		}
 
-		// Movement-only for now: press/drag data just relocates the cursor. We
-		// never emit BTN_LEFT here on purpose -- clicking is handled separately
-		// (e.g. a keyboard key, and soon a pen button).
 		b.devLock.Lock()
 		b.dev.emit(evAbs, absX, x)
 		b.dev.emit(evAbs, absY, y)
@@ -126,18 +152,18 @@ func (b *Bridge) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (b *Bridge) handlePostSettings(w http.ResponseWriter, r *http.Request) {
-	b.mu.Lock()
-	// Decode over the current config so only the mapping areas are updated;
-	// abs_range stays fixed at what the device was created with.
-	updated := b.cfg
-	absRange := b.cfg.AbsRange
-	if err := json.NewDecoder(r.Body).Decode(&updated); err != nil {
-		b.mu.Unlock()
+	var incoming Config
+	if err := json.NewDecoder(r.Body).Decode(&incoming); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	updated.AbsRange = absRange
-	b.cfg = updated
+	if incoming.Displays == nil {
+		incoming.Displays = map[string]DisplayConfig{}
+	}
+
+	b.mu.Lock()
+	incoming.AbsRange = b.cfg.AbsRange
+	b.cfg = incoming
 	cfg := b.cfg
 	b.mu.Unlock()
 
@@ -145,6 +171,32 @@ func (b *Bridge) handlePostSettings(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[warn] failed to save config: %v", err)
 	}
 	writeJSON(w, cfg)
+}
+
+func (b *Bridge) handleDisplays(w http.ResponseWriter, r *http.Request) {
+	b.mu.RLock()
+	cfg := b.cfg
+	displays := b.displays
+	b.mu.RUnlock()
+
+	bx, by, bw, bh := boundingBox(displays)
+
+	type displayView struct {
+		Display
+		Enabled      bool `json:"enabled"`
+		TabletRegion Area `json:"tablet_region"`
+	}
+	views := make([]displayView, 0, len(displays))
+	for _, d := range displays {
+		dc := cfg.Displays[d.Name]
+		views = append(views, displayView{Display: d, Enabled: dc.Enabled, TabletRegion: dc.TabletRegion})
+	}
+
+	writeJSON(w, map[string]any{
+		"displays":     views,
+		"bounding_box": Area{X: bx, Y: by, W: bw, H: bh},
+		"abs_range":    cfg.AbsRange,
+	})
 }
 
 func (b *Bridge) handleInfo(w http.ResponseWriter, r *http.Request) {
@@ -168,7 +220,8 @@ func main() {
 	}
 	defer dev.Close()
 
-	b := &Bridge{port: *port, cfg: cfg, dev: dev}
+	b := &Bridge{port: *port, cfg: cfg, dev: dev, displays: detectDisplays()}
+	go b.refreshDisplays()
 
 	staticSub, err := fs.Sub(staticFS, "static")
 	if err != nil {
@@ -199,6 +252,7 @@ func main() {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
 	})
+	mux.HandleFunc("/api/displays", b.handleDisplays)
 	mux.HandleFunc("/api/info", b.handleInfo)
 
 	ip := getLocalIP()

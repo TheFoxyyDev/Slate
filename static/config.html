@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>Slate — Settings</title>
+<title>Slate Settings</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -10,17 +10,15 @@
 <p id="info" class="muted">loading…</p>
 
 <div class="panel">
-  <h2>Screen target area</h2>
-  <p class="muted">The region of your screen the tablet maps to. Drag on the box, or type percentages.</p>
-  <canvas id="screenCanvas" width="480" height="270"></canvas>
-  <div class="fields" id="screenFields"></div>
+  <h2>Displays</h2>
+  <p class="muted">Drag a display onto the tablet below to map it. Each display remembers its own mapping. Displays not placed here are ignored.</p>
+  <div class="tray" id="tray"></div>
 </div>
 
 <div class="panel">
-  <h2>Tablet active area</h2>
-  <p class="muted">The region of your tablet's physical surface that's "live." Outside this box on the tablet gets clamped to the nearest edge.</p>
-  <canvas id="tabletCanvas" width="480" height="300"></canvas>
-  <div class="fields" id="tabletFields"></div>
+  <h2>Tablet surface</h2>
+  <p class="muted">This canvas is your tablet. A display's rectangle is the part of the tablet that drives that monitor. Drag to move, drag the corner to resize, tap × to remove. Areas covered by no display are dead.</p>
+  <canvas id="tablet" width="560" height="350"></canvas>
 </div>
 
 <button id="save">Save</button>

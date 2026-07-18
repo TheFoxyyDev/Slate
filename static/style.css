@@ -2,7 +2,7 @@ body {
   background: #14141c;
   color: #eee;
   font: 15px system-ui, sans-serif;
-  max-width: 560px;
+  max-width: 620px;
   margin: 40px auto;
   padding: 0 16px;
 }
@@ -19,10 +19,32 @@ h2 { font-size: 16px; margin-bottom: 4px; }
 canvas {
   display: block;
   border-radius: 6px;
-  cursor: crosshair;
+  cursor: default;
   margin: 10px 0;
   max-width: 100%;
+  touch-action: none;
 }
+.tray {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-height: 20px;
+  margin-top: 10px;
+}
+.chip {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: #0f0f16;
+  border: 2px solid #33334a;
+  border-radius: 8px;
+  padding: 8px 12px;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.chip:active { cursor: grabbing; }
+.chip .muted { font-size: 11px; }
 .fields {
   display: flex;
   gap: 12px;

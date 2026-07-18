@@ -11,7 +11,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// Linux input subsystem constants (from <linux/input-event-codes.h>).
 const (
 	evSyn = 0x00
 	evKey = 0x01
@@ -32,8 +31,6 @@ const (
 
 	pressureMax = 1023
 
-	// uinput ioctl request codes (<linux/uinput.h>). _IO('U', 1|2) for the
-	// device lifecycle; _IOW('U', n, int) for the capability-bit setters.
 	uiDevCreate  = 0x5501
 	uiDevDestroy = 0x5502
 	uiSetEvbit   = 0x40045564
@@ -48,8 +45,6 @@ type inputID struct {
 	Version uint16
 }
 
-// uinputUserDev mirrors struct uinput_user_dev; field order and widths must
-// match the kernel ABI exactly (written verbatim to /dev/uinput).
 type uinputUserDev struct {
 	Name         [nameLen]byte
 	ID           inputID
@@ -60,7 +55,6 @@ type uinputUserDev struct {
 	Absflat      [absCnt]int32
 }
 
-// inputEvent mirrors struct input_event on 64-bit Linux (16-byte timeval).
 type inputEvent struct {
 	Sec   int64
 	Usec  int64
@@ -69,14 +63,6 @@ type inputEvent struct {
 	Value int32
 }
 
-// Device is a virtual absolute pointing device.
-//
-// It deliberately does NOT advertise BTN_TOOL_PEN / BTN_TOUCH: those bits make
-// udev tag the device as ID_INPUT_TABLET, routing it through the separate
-// Wayland tablet-v2 protocol instead of the normal pointer protocol -- and not
-// every compositor forwards tablet-tool motion to the shared cursor. Without
-// them this is a plain absolute pointer (think "mouse mode" on a real tablet),
-// which both X11 and Wayland reliably drive the cursor with.
 type Device struct {
 	f        *os.File
 	absRange int
