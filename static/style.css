@@ -75,6 +75,56 @@ button {
   cursor: pointer;
 }
 button:hover { background: #78b3ff; }
+button.secondary {
+  background: #2c2c3d;
+  color: #eee;
+  margin-left: 8px;
+}
+button.secondary:hover { background: #3a3a52; }
+button[hidden] { display: none; }
+
+.ctxmenu {
+  position: fixed;
+  z-index: 50;
+  min-width: 190px;
+  background: #1b1b28;
+  border: 1px solid #3a3a52;
+  border-radius: 8px;
+  padding: 4px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+}
+.ctxmenu[hidden] { display: none; }
+.ctxitem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  background: transparent;
+  color: #eee;
+  font: 500 13px system-ui, sans-serif;
+  padding: 7px 10px;
+  border-radius: 5px;
+  text-align: left;
+}
+.ctxitem:hover { background: #2c2c3d; }
+.ctxitem[hidden] { display: none; }
+.ctxtitle {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 6px 10px 4px;
+}
+.ctxtitle[hidden] { display: none; }
+.ctxnote {
+  color: #9a9aa8;
+  font-size: 12px;
+  padding: 7px 10px;
+  max-width: 200px;
+}
+.ctxnote[hidden] { display: none; }
+.ctxitem .check { width: 12px; color: #5aa0ff; visibility: hidden; }
+.ctxitem[aria-checked="true"] .check { visibility: visible; }
 #status { margin-left: 10px; }
 .badge {
   margin-left: 10px;

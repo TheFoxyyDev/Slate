@@ -19,11 +19,21 @@
   <h2>Tablet surface</h2>
   <p class="muted">This canvas is your tablet. A display's rectangle is the part of the tablet that drives that monitor. Drag to move, drag the corner to resize, tap × to remove. Areas covered by no display are dead.</p>
   <canvas id="tablet" width="560" height="350"></canvas>
+  <p class="muted">Right-click a display for its options. Aspect lock is per display.</p>
 </div>
 
 <button id="save">Save</button>
+<button id="revert" class="secondary" hidden>Revert</button>
 <span id="dirty" class="badge" hidden>Unsaved changes (previewing live on tablet)</span>
 <span id="status" class="muted"></span>
+
+<div id="ctxmenu" class="ctxmenu" role="menu" hidden>
+  <div class="ctxtitle" id="ctx-title" hidden></div>
+  <button type="button" class="ctxitem" id="ctx-lock" role="menuitemcheckbox" aria-checked="true">
+    <span class="check">✓</span><span>Lock aspect ratio</span>
+  </button>
+  <div class="ctxnote" id="ctx-empty" hidden>Right-click a display to change its options.</div>
+</div>
 
 <script src="/static/config.js?v=__VERSION__"></script>
 </body>

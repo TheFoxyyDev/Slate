@@ -21,7 +21,7 @@ import (
 //go:embed static
 var staticFS embed.FS
 
-const version = "v1.3"
+const version = "v1.4"
 
 type Bridge struct {
 	port int

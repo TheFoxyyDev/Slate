@@ -15,9 +15,40 @@ const tray = document.getElementById("tray");
 
 let displays = [];
 let dirty = false;
+let saved = "[]";
 
 const HANDLE = 16;
 const MIN_FRAC = 0.05;
+
+const LOCKS_KEY = "slate.aspectLocks";
+// Falls back to the pre-per-display global setting so an earlier choice carries over.
+const lockDefault = localStorage.getItem("slate.lockAspect") !== "0";
+let locks = {};
+try { locks = JSON.parse(localStorage.getItem(LOCKS_KEY)) || {}; } catch { locks = {}; }
+
+function lockFor(d) {
+  return d.name in locks ? locks[d.name] : lockDefault;
+}
+function setLock(d, v) {
+  locks[d.name] = v;
+  localStorage.setItem(LOCKS_KEY, JSON.stringify(locks));
+}
+
+// Region w/h are fractions of the canvas, so a display's pixel aspect ratio
+// becomes this w:h fraction ratio once the canvas' own aspect is divided out.
+function fracAspect(d) {
+  return (d.w / d.h) / (canvas.width / canvas.height);
+}
+
+function fitAspect(d, w, h, maxW, maxH) {
+  const a = fracAspect(d);
+  if (w / a > h) h = w / a; else w = h * a;
+  if (w > maxW) { w = maxW; h = w / a; }
+  if (h > maxH) { h = maxH; w = h * a; }
+  if (w < MIN_FRAC) { w = MIN_FRAC; h = w / a; }
+  if (h < MIN_FRAC) { h = MIN_FRAC; w = h * a; }
+  return { w: Math.min(w, maxW), h: Math.min(h, maxH) };
+}
 
 function displaysMap() {
   const map = {};
@@ -31,6 +62,8 @@ function setDirty(v) {
   dirty = v;
   const el = document.getElementById("dirty");
   if (el) el.hidden = !v;
+  const revert = document.getElementById("revert");
+  if (revert) revert.hidden = !v;
 }
 
 let previewPending = false;
@@ -85,7 +118,7 @@ function draw() {
     ctx.fillText(d.name, p.x + 8, p.y + 20);
     ctx.fillStyle = "rgba(255,255,255,0.65)";
     ctx.font = "11px system-ui, sans-serif";
-    ctx.fillText(`${d.w}×${d.h}`, p.x + 8, p.y + 36);
+    ctx.fillText(`${d.w}×${d.h}${lockFor(d) ? " · aspect locked" : ""}`, p.x + 8, p.y + 36);
 
     ctx.fillStyle = c;
     ctx.fillRect(p.x + p.w - HANDLE, p.y + p.h - HANDLE, HANDLE, HANDLE);
@@ -124,8 +157,12 @@ function renderTray() {
     const chip = document.createElement("div");
     chip.className = "chip";
     chip.style.borderColor = colorFor(i);
-    chip.innerHTML = `<strong>${d.name}</strong><span class="muted">${d.w}×${d.h}</span>`;
+    chip.innerHTML = `<strong>${d.name}</strong><span class="muted">${d.w}×${d.h}${lockFor(d) ? " · aspect locked" : ""}</span>`;
     chip.addEventListener("pointerdown", (e) => startTrayDrag(e, d));
+    chip.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      showMenu(e, d);
+    });
     tray.appendChild(chip);
   });
 }
@@ -143,6 +180,7 @@ function overCanvas(e) {
 }
 
 function startTrayDrag(e, d) {
+  if (e.button !== 0) return;
   e.preventDefault();
   const onMove = (ev) => {
     canvas.style.outline = overCanvas(ev) ? "2px solid " + colorFor(displays.indexOf(d)) : "";
@@ -188,6 +226,8 @@ function hitTest(pos) {
 }
 
 canvas.addEventListener("pointerdown", (e) => {
+  if (e.button !== 0) return;
+  hideMenu();
   const pos = canvasPos(e);
   const hit = hitTest(pos);
   if (!hit) return;
@@ -210,6 +250,10 @@ canvas.addEventListener("pointerdown", (e) => {
       let y = (p.y - hit.grab.dy) / canvas.height;
       r.x = Math.min(Math.max(x, 0), 1 - r.w);
       r.y = Math.min(Math.max(y, 0), 1 - r.h);
+    } else if (lockFor(hit.d)) {
+      const fit = fitAspect(hit.d, p.x / canvas.width - r.x, p.y / canvas.height - r.y, 1 - r.x, 1 - r.y);
+      r.w = fit.w;
+      r.h = fit.h;
     } else {
       r.w = Math.min(Math.max(p.x / canvas.width - r.x, MIN_FRAC), 1 - r.x);
       r.h = Math.min(Math.max(p.y / canvas.height - r.y, MIN_FRAC), 1 - r.y);
@@ -225,14 +269,92 @@ canvas.addEventListener("pointerdown", (e) => {
   canvas.addEventListener("pointerup", onUp);
 });
 
-async function load() {
+const menu = document.getElementById("ctxmenu");
+const lockItem = document.getElementById("ctx-lock");
+const menuTitle = document.getElementById("ctx-title");
+const menuEmpty = document.getElementById("ctx-empty");
+let menuTarget = null;
+
+function hideMenu() {
+  menu.hidden = true;
+  menuTarget = null;
+}
+
+function showMenu(e, d) {
+  menuTarget = d || null;
+  menuTitle.hidden = !d;
+  lockItem.hidden = !d;
+  menuEmpty.hidden = !!d;
+  if (d) {
+    menuTitle.textContent = d.name;
+    menuTitle.style.color = colorFor(displays.indexOf(d));
+    lockItem.setAttribute("aria-checked", lockFor(d) ? "true" : "false");
+  }
+  menu.hidden = false;
+  const r = menu.getBoundingClientRect();
+  const x = Math.min(e.clientX, window.innerWidth - r.width - 8);
+  const y = Math.min(e.clientY, window.innerHeight - r.height - 8);
+  menu.style.left = Math.max(8, x) + "px";
+  menu.style.top = Math.max(8, y) + "px";
+}
+
+canvas.addEventListener("contextmenu", (e) => {
+  e.preventDefault();
+  const hit = hitTest(canvasPos(e));
+  showMenu(e, hit && hit.d);
+});
+
+lockItem.addEventListener("click", () => {
+  const d = menuTarget;
+  hideMenu();
+  if (!d) return;
+  const on = !lockFor(d);
+  setLock(d, on);
+  renderTray();
+  draw();
+  if (!on || !d.enabled) return;
+  const r = d.tablet_region;
+  const fit = fitAspect(d, r.w, r.h, 1 - r.x, 1 - r.y);
+  if (Math.abs(fit.w - r.w) < 1e-4 && Math.abs(fit.h - r.h) < 1e-4) return;
+  r.w = fit.w;
+  r.h = fit.h;
+  draw();
+  schedulePreview();
+});
+
+window.addEventListener("pointerdown", (e) => {
+  if (!menu.hidden && !menu.contains(e.target)) hideMenu();
+}, true);
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") hideMenu();
+});
+window.addEventListener("scroll", hideMenu, true);
+window.addEventListener("blur", hideMenu);
+
+async function clearPreview() {
   await fetch("/api/preview", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ clear: true }),
   }).catch(() => {});
+}
+
+document.getElementById("revert").addEventListener("click", async () => {
+  displays = JSON.parse(saved);
+  setDirty(false);
+  renderTray();
+  draw();
+  await clearPreview();
+  const status = document.getElementById("status");
+  status.textContent = "Reverted";
+  setTimeout(() => { status.textContent = ""; }, 1500);
+});
+
+async function load() {
+  await clearPreview();
   const data = await fetchJSON("/api/displays");
   displays = data.displays || [];
+  saved = JSON.stringify(displays);
   setDirty(false);
   renderTray();
   draw();
@@ -249,6 +371,7 @@ document.getElementById("save").addEventListener("click", async () => {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ displays: displaysMap() }),
   });
+  saved = JSON.stringify(displays);
   setDirty(false);
   const status = document.getElementById("status");
   status.textContent = "Saved ✓";
