@@ -11,6 +11,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"os/exec"
 	"sync"
 	"time"
 
@@ -21,7 +22,7 @@ import (
 //go:embed static
 var staticFS embed.FS
 
-const version = "v1.4"
+const version = "v1.5"
 
 type Bridge struct {
 	port int
@@ -334,6 +335,7 @@ func main() {
 
 	b := &Bridge{port: *port, cfg: cfg, dev: dev, displays: detectDisplays()}
 	go b.refreshDisplays()
+	go autoADBReverse(*port)
 
 	staticSub, err := fs.Sub(staticFS, "static")
 	if err != nil {
@@ -409,4 +411,18 @@ func printQR(text string) {
 		return
 	}
 	fmt.Print(q.ToSmallString(false))
+}
+
+func autoADBReverse(port int) {
+	portStr := fmt.Sprintf("tcp:%d", port)
+	for {
+		// Attempt to run adb reverse.
+		// If adb is not installed, this will fail silently.
+		// If no device is connected, adb reverse fails quickly.
+		// If it succeeds, the port is forwarded.
+		// We loop every few seconds so that if a device is plugged in later, it gets caught.
+		cmd := exec.Command("adb", "reverse", portStr, portStr)
+		_ = cmd.Run()
+		time.Sleep(3 * time.Second)
+	}
 }

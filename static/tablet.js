@@ -129,6 +129,12 @@ function draw() {
     ctx.fillStyle = c;
     ctx.font = "14px system-ui, sans-serif";
     ctx.fillText(r.name, ax + 8, ay + 20);
+
+    // Draw center dot
+    ctx.beginPath();
+    ctx.arc(ax + aw / 2, ay + ah / 2, 1.25, 0, 2 * Math.PI);
+    ctx.fillStyle = "rgba(255, 0, 0, 0.25)";
+    ctx.fill();
   });
 }
 
